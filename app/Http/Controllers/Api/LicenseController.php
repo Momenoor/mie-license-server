@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\License;
+use App\Models\Release;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -66,6 +67,7 @@ class LicenseController extends Controller
         $validator = Validator::make($request->all(), [
             'license_key' => ['required', 'string'],
             'fingerprint' => ['required', 'string'],
+            'app_version' => ['nullable', 'string', 'max:50'],
         ]);
 
         if ($validator->fails()) {
@@ -92,7 +94,13 @@ class LicenseController extends Controller
             return $this->invalid('not_activated');
         }
 
-        $activation->update(['last_seen_at' => now(), 'ip_address' => $request->ip()]);
+        // Keeps each installation's running version current, so the
+        // activations list shows who still needs an update.
+        $activation->update(array_filter([
+            'last_seen_at' => now(),
+            'ip_address' => $request->ip(),
+            'app_version' => $data['app_version'] ?? null,
+        ]));
 
         return $this->valid($license);
     }
@@ -121,12 +129,22 @@ class LicenseController extends Controller
         return null;
     }
 
+    /**
+     * Also carries the newest published release, so an installation
+     * learns about updates from the check-ins it already makes — no
+     * separate endpoint, no extra request.
+     */
     private function valid(License $license): JsonResponse
     {
+        $release = Release::latestFor($license->product);
+
         return response()->json([
             'valid' => true,
             'expires_at' => $license->expires_at?->toIso8601String(),
             'plan' => $license->plan,
+            'latest_version' => $release?->version,
+            'release_notes' => $release?->notes,
+            'released_at' => $release?->released_at?->toIso8601String(),
         ]);
     }
 

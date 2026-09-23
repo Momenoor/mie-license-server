@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\License;
 use App\Models\LicenseActivation;
+use App\Models\Release;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -142,5 +143,56 @@ class LicenseApiTest extends TestCase
         ]);
 
         $response->assertOk()->assertJson(['valid' => false, 'reason' => 'suspended']);
+    }
+
+    public function test_verify_returns_the_newest_published_release_by_semantic_version(): void
+    {
+        $license = License::factory()->withKey('MIE-AAAAA-BBBBB-CCCCC-DDDDD')->create();
+        LicenseActivation::factory()->create(['license_id' => $license->id, 'fingerprint' => 'install-1']);
+
+        Release::factory()->create(['version' => '1.9.0', 'notes' => 'Older']);
+        Release::factory()->create(['version' => '1.10.0', 'notes' => 'Newest']);
+        Release::factory()->create(['version' => '2.0.0', 'is_published' => false]);
+        Release::factory()->create(['version' => '9.0.0', 'product' => 'other-product']);
+
+        $response = $this->postJson('/api/v1/license/verify', [
+            'license_key' => 'MIE-AAAAA-BBBBB-CCCCC-DDDDD',
+            'fingerprint' => 'install-1',
+        ]);
+
+        $response->assertOk()->assertJson([
+            'valid' => true,
+            'latest_version' => '1.10.0',
+            'release_notes' => 'Newest',
+        ]);
+    }
+
+    public function test_verify_records_the_installations_running_version(): void
+    {
+        $license = License::factory()->withKey('MIE-AAAAA-BBBBB-CCCCC-DDDDD')->create();
+        $activation = LicenseActivation::factory()->create([
+            'license_id' => $license->id,
+            'fingerprint' => 'install-1',
+            'app_version' => '1.0.0',
+        ]);
+
+        $this->postJson('/api/v1/license/verify', [
+            'license_key' => 'MIE-AAAAA-BBBBB-CCCCC-DDDDD',
+            'fingerprint' => 'install-1',
+            'app_version' => '1.1.0',
+        ])->assertOk();
+
+        $this->assertSame('1.1.0', $activation->fresh()->app_version);
+    }
+
+    public function test_verify_reports_no_latest_version_when_nothing_is_published(): void
+    {
+        $license = License::factory()->withKey('MIE-AAAAA-BBBBB-CCCCC-DDDDD')->create();
+        LicenseActivation::factory()->create(['license_id' => $license->id, 'fingerprint' => 'install-1']);
+
+        $this->postJson('/api/v1/license/verify', [
+            'license_key' => 'MIE-AAAAA-BBBBB-CCCCC-DDDDD',
+            'fingerprint' => 'install-1',
+        ])->assertOk()->assertJson(['valid' => true, 'latest_version' => null]);
     }
 }
