@@ -68,7 +68,7 @@ class ReleaseIntakeTest extends TestCase
         $this->assertSame('Written by hand', Release::query()->sole()->notes);
     }
 
-    public function test_sync_pulls_github_releases_and_bare_tags(): void
+    public function test_sync_pulls_github_releases_and_bare_tags_with_githubs_dates(): void
     {
         Http::fake([
             'api.github.com/repos/Momenoor/wakeel/releases*' => Http::response([
@@ -76,20 +76,43 @@ class ReleaseIntakeTest extends TestCase
                 ['tag_name' => 'v1.0.14', 'body' => 'draft', 'draft' => true, 'published_at' => null],
             ]),
             'api.github.com/repos/Momenoor/wakeel/tags*' => Http::response([
-                ['name' => 'v1.0.13'],
-                ['name' => 'v1.0.12'],
-                ['name' => 'not-a-release'],
+                ['name' => 'v1.0.13', 'commit' => ['url' => 'https://api.github.com/repos/Momenoor/wakeel/commits/c13']],
+                ['name' => 'v1.0.12', 'commit' => ['url' => 'https://api.github.com/repos/Momenoor/wakeel/commits/c12']],
+                ['name' => 'v1.0.11', 'commit' => ['url' => 'https://api.github.com/repos/Momenoor/wakeel/commits/c11']],
+                ['name' => 'not-a-release', 'commit' => ['url' => 'https://api.github.com/repos/Momenoor/wakeel/commits/x']],
             ]),
+            'api.github.com/repos/Momenoor/wakeel/commits/c11' => Http::response(['commit' => ['committer' => ['date' => '2026-09-24T08:30:00Z']]]),
         ]);
 
         Release::factory()->create(['version' => '1.0.12', 'is_published' => true]);
 
-        $this->assertSame(1, app(ReleaseIntake::class)->syncFromGitHub());
+        $this->assertSame(2, app(ReleaseIntake::class)->syncFromGitHub());
 
-        $new = Release::query()->where('version', '1.0.13')->sole();
-        $this->assertFalse($new->is_published);
-        $this->assertSame('- Keep PHP handler', $new->notes);
-        $this->assertSame(2, Release::query()->count(), 'Drafts and non-version tags are skipped; existing releases untouched.');
+        // A GitHub release: its notes and GitHub's publish date.
+        $fromRelease = Release::query()->where('version', '1.0.13')->sole();
+        $this->assertFalse($fromRelease->is_published);
+        $this->assertSame('- Keep PHP handler', $fromRelease->notes);
+        $this->assertSame('2026-09-25 10:00:00', $fromRelease->released_at->utc()->toDateTimeString());
+
+        // A bare tag: dated by its commit.
+        $fromTag = Release::query()->where('version', '1.0.11')->sole();
+        $this->assertSame('2026-09-24 08:30:00', $fromTag->released_at->utc()->toDateTimeString());
+
+        // Already-recorded tags cost no extra request; drafts and
+        // non-version tags are skipped; existing releases stay published.
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'commits/c12'));
+        $this->assertSame(3, Release::query()->count());
         $this->assertTrue(Release::query()->where('version', '1.0.12')->sole()->is_published);
+    }
+
+    public function test_githubs_date_replaces_a_fallback_date_on_an_existing_release(): void
+    {
+        Release::factory()->create(['version' => '1.2.0', 'released_at' => '2026-01-01 00:00:00']);
+
+        $this->withToken('secret-token')
+            ->postJson('/api/v1/releases', ['version' => 'v1.2.0', 'released_at' => '2026-09-25T10:00:00Z'])
+            ->assertOk();
+
+        $this->assertSame('2026-09-25 10:00:00', Release::query()->sole()->released_at->utc()->toDateTimeString());
     }
 }

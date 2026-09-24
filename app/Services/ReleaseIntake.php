@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Release;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -37,6 +38,10 @@ class ReleaseIntake
         if ($created) {
             $release->is_published = false;
             $release->released_at = $releasedAt ?? now();
+        } elseif ($releasedAt !== null) {
+            // GitHub's date for the release is authoritative — this also
+            // corrects releases recorded earlier with a fallback date.
+            $release->released_at = $releasedAt;
         }
 
         // Keep notes someone wrote by hand in the admin panel.
@@ -50,8 +55,9 @@ class ReleaseIntake
     }
 
     /**
-     * Pulls the repository's GitHub releases (with their notes), then any
-     * vX.Y.Z tags that have no GitHub release (without notes).
+     * Pulls the repository's GitHub releases (with their notes and GitHub's
+     * publish date), then any vX.Y.Z tags that have no GitHub release
+     * (without notes, dated by the commit the tag points at).
      *
      * @return int how many releases were newly created
      */
@@ -78,10 +84,47 @@ class ReleaseIntake
                 continue;
             }
 
-            $created += (int) $this->record($tag['name'], null)['created'];
+            // One extra request per tag for its commit date — only for tags
+            // not recorded yet, to stay inside GitHub's anonymous limit of
+            // 60 requests an hour.
+            if ($this->isRecorded($tag['name'])) {
+                continue;
+            }
+
+            $created += (int) $this->record($tag['name'], null, $this->commitDate($tag))['created'];
         }
 
         return $created;
+    }
+
+    private function isRecorded(string $tag): bool
+    {
+        return Release::query()
+            ->where('product', config('releases.product'))
+            ->where('version', ltrim($tag, 'vV'))
+            ->exists();
+    }
+
+    /**
+     * When the tagged commit was made, from the commit URL GitHub's tag
+     * listing includes. Null if GitHub doesn't answer.
+     *
+     * @param  array<string, mixed>  $tag
+     */
+    private function commitDate(array $tag): ?Carbon
+    {
+        $url = $tag['commit']['url'] ?? null;
+
+        if (! is_string($url) || ! str_starts_with($url, 'https://api.github.com/')) {
+            return null;
+        }
+
+        $response = $this->request()->get($url);
+        $date = $response->successful()
+            ? ($response->json('commit.committer.date') ?? $response->json('commit.author.date'))
+            : null;
+
+        return is_string($date) ? Carbon::parse($date) : null;
     }
 
     private function isVersionTag(string $tag): bool
@@ -94,10 +137,7 @@ class ReleaseIntake
      */
     private function github(string $endpoint): array
     {
-        $response = Http::acceptJson()
-            ->withHeaders(['X-GitHub-Api-Version' => '2022-11-28'])
-            ->when(config('releases.github_token'), fn ($http) => $http->withToken(config('releases.github_token')))
-            ->timeout(15)
+        $response = $this->request()
             ->get('https://api.github.com/repos/'.config('releases.github_repo')."/{$endpoint}", ['per_page' => 100]);
 
         if (! $response->successful()) {
@@ -105,5 +145,13 @@ class ReleaseIntake
         }
 
         return $response->json();
+    }
+
+    private function request(): PendingRequest
+    {
+        return Http::acceptJson()
+            ->withHeaders(['X-GitHub-Api-Version' => '2022-11-28'])
+            ->when(config('releases.github_token'), fn (PendingRequest $http) => $http->withToken(config('releases.github_token')))
+            ->timeout(15);
     }
 }
