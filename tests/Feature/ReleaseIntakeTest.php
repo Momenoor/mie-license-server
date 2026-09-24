@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Release;
 use App\Services\ReleaseIntake;
+use Filament\Support\Facades\FilamentTimezone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -103,6 +104,21 @@ class ReleaseIntakeTest extends TestCase
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'commits/c12'));
         $this->assertSame(3, Release::query()->count());
         $this->assertTrue(Release::query()->where('version', '1.0.12')->sole()->is_published);
+    }
+
+    public function test_dates_are_stored_in_utc_and_shown_in_local_time(): void
+    {
+        // The same moment, sent with an offset instead of Z.
+        $this->withToken('secret-token')
+            ->postJson('/api/v1/releases', ['version' => '1.2.0', 'released_at' => '2026-09-25T00:25:53+04:00'])
+            ->assertCreated();
+
+        $release = Release::query()->sole();
+        $this->assertSame('2026-09-24 20:25:53', $release->getRawOriginal('released_at'));
+
+        // What the admin panel's date columns render.
+        $this->assertSame('Asia/Dubai', FilamentTimezone::get());
+        $this->assertSame('2026-09-25 00:25', $release->released_at->setTimezone(FilamentTimezone::get())->format('Y-m-d H:i'));
     }
 
     public function test_githubs_date_replaces_a_fallback_date_on_an_existing_release(): void

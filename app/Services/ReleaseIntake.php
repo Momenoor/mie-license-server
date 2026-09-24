@@ -24,6 +24,10 @@ class ReleaseIntake
     {
         $version = ltrim(trim($version), 'vV');
 
+        // Stored in UTC like every other date here, whatever offset the
+        // date arrived with (the admin panel shows it in local time).
+        $releasedAt = $releasedAt?->copy()->utc();
+
         if (preg_match('/^\d+\.\d+\.\d+$/', $version) !== 1) {
             throw new RuntimeException("Not a release version: {$version}");
         }

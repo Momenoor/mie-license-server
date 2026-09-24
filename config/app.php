@@ -67,6 +67,11 @@ return [
 
     'timezone' => 'UTC',
 
+    // Dates are stored in UTC (above) — GitHub's release dates and API
+    // check-in times arrive in UTC too — and shown in the admin panel in
+    // this zone instead (see AppServiceProvider).
+    'display_timezone' => env('APP_DISPLAY_TIMEZONE', 'Asia/Dubai'),
+
     /*
     |--------------------------------------------------------------------------
     | Application Locale Configuration
