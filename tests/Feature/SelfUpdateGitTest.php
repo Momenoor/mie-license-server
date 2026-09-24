@@ -18,6 +18,8 @@ use Tests\TestCase;
  */
 class SelfUpdateGitTest extends TestCase
 {
+    private const CPANEL_HANDLER = "# php -- BEGIN cPanel-generated handler, do not edit\n# Set the \"ea-php85\" package as the default \"PHP\" programming language.\n<IfModule mime_module>\n  AddHandler application/x-httpd-ea-php85 .php .php8 .phtml\n</IfModule>\n# php -- END cPanel-generated handler, do not edit\n";
+
     private string $root;
 
     private string $server;
@@ -40,12 +42,15 @@ class SelfUpdateGitTest extends TestCase
         $this->git($this->root, ['init', '--bare', '-b', 'master', 'origin.git']);
         $this->git($this->root, ['clone', 'origin.git', 'work']);
 
+        File::ensureDirectoryExists($work.'/public');
         File::put($work.'/app.txt', "v1\n");
         File::put($work.'/composer.lock', "lock v1\n");
+        File::put($work.'/public/.htaccess', "RewriteEngine On\nRULES v1\n");
         $this->commitAndTag($work, 'v1.0.0');
 
         File::put($work.'/app.txt', "v2\n");
         File::put($work.'/composer.lock', "lock v2\n");
+        File::put($work.'/public/.htaccess', "RewriteEngine On\nRULES v2\n");
         $this->commitAndTag($work, 'v1.1.0');
 
         $this->git($work, ['push', 'origin', 'master', '--tags']);
@@ -53,6 +58,8 @@ class SelfUpdateGitTest extends TestCase
         $this->git($this->root, ['clone', 'origin.git', 'server']);
         $this->git($this->server, ['-c', 'advice.detachedHead=false', 'checkout', 'v1.0.0']);
         File::put($this->server.'/composer.lock', "lock rewritten on the server\n");
+        // What cPanel's MultiPHP Manager appends when a PHP version is set.
+        File::append($this->server.'/public/.htaccess', "\n".self::CPANEL_HANDLER);
 
         $this->originalBasePath = $this->app->basePath();
         $this->app->setBasePath($this->server);
@@ -93,6 +100,11 @@ class SelfUpdateGitTest extends TestCase
 
         $this->assertSame("v2\n", $this->read('app.txt'));
         $this->assertSame("lock v2\n", $this->read('composer.lock'), 'The server-rewritten lock file is replaced by the release\'s.');
+
+        // What stopped the live update: cPanel's handler in public/.htaccess.
+        // The release's rules come in, the handler stays at the bottom.
+        $this->assertSame("RewriteEngine On\nRULES v2\n\n".self::CPANEL_HANDLER, $this->read('public/.htaccess'));
+        $this->assertNotEmpty(File::glob($this->server.'/storage/app/self-update/public_.htaccess-*'));
         $this->assertSame('1.1.0', AppVersion::current());
     }
 
@@ -115,6 +127,16 @@ class SelfUpdateGitTest extends TestCase
 
         $this->assertFalse($updater->runNextStep());
         $this->assertStringContainsString('v9.9.9', $updater->state()['log']);
+    }
+
+    public function test_other_handler_blocks_go_back_on_top(): void
+    {
+        $blocks = SelfUpdater::phpHandlerBlocks(
+            "# Force PHP 8.5\n<IfModule mime_module>\n  AddHandler x-php85 .php\n</IfModule>\n\nRewriteEngine On\n",
+        );
+
+        $this->assertSame("# Force PHP 8.5\n<IfModule mime_module>\n  AddHandler x-php85 .php\n</IfModule>\n\n", $blocks['top']);
+        $this->assertSame('', $blocks['bottom']);
     }
 
     private function read(string $file): string

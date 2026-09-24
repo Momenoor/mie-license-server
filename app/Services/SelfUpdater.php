@@ -223,10 +223,14 @@ class SelfUpdater
 
         $output .= "Found tag v{$version}.\n";
 
-        // Local edits would be overwritten (or block the checkout). Only
-        // files Composer/npm regenerate on the server are expected, and
-        // checkout() replaces those with the release's own.
-        $unexpected = array_filter($this->changedFiles(), fn (string $file): bool => ! $this->isGenerated($file));
+        // Local edits would be overwritten (or block the checkout). Only two
+        // kinds are expected, and checkout() handles both: files Composer/npm
+        // regenerate on the server, and the PHP-version handler hosts add to
+        // .htaccess files (e.g. cPanel's MultiPHP Manager).
+        $unexpected = array_filter(
+            $this->changedFiles(),
+            fn (string $file): bool => ! $this->isGenerated($file) && ! $this->isHtaccess($file),
+        );
 
         if ($unexpected !== []) {
             throw new RuntimeException('These files were changed on the server and would be overwritten: '.implode(', ', $unexpected));
@@ -237,7 +241,8 @@ class SelfUpdater
 
     private function checkout(string $version): string
     {
-        $generated = array_values(array_filter($this->changedFiles(), $this->isGenerated(...)));
+        $changed = $this->changedFiles();
+        $generated = array_values(array_filter($changed, $this->isGenerated(...)));
 
         if ($generated !== []) {
             $this->git(['checkout', '--', ...$generated]);
@@ -247,7 +252,64 @@ class SelfUpdater
             $this->git(['clean', '-f', '-q', '--', 'public/build']);
         }
 
-        return $this->git(['-c', 'advice.detachedHead=false', 'checkout', "v{$version}"]);
+        // Each server-edited .htaccess: remember its PHP handler, back the
+        // file up, and let the release's version replace it — without the
+        // handler the host could fall back to an older PHP.
+        $handlers = [];
+
+        foreach (array_filter($changed, $this->isHtaccess(...)) as $file) {
+            $local = (string) file_get_contents(base_path($file));
+            $handlers[$file] = static::phpHandlerBlocks($local);
+
+            file_put_contents($this->directory().'/'.str_replace('/', '_', $file).'-'.now()->format('Ymd-His'), $local);
+            $this->git(['checkout', '--', $file]);
+        }
+
+        $output = $this->git(['-c', 'advice.detachedHead=false', 'checkout', "v{$version}"]);
+
+        foreach ($handlers as $file => ['top' => $top, 'bottom' => $bottom]) {
+            $release = str_replace("\r\n", "\n", (string) @file_get_contents(base_path($file)));
+            file_put_contents(base_path($file), $top.$release.($bottom !== '' ? "\n".$bottom : ''));
+            $output .= "Replaced {$file} with this release's, keeping its PHP handler (the previous file is saved in storage/app/self-update/).\n";
+        }
+
+        return $output;
+    }
+
+    /**
+     * The PHP-version handler blocks in an .htaccess, split by where they
+     * go back: cPanel's own marked block ("# php -- BEGIN cPanel-generated
+     * handler" … "END") at the bottom, where MultiPHP Manager keeps it;
+     * any other `<IfModule mime_module>` block with an AddHandler (and the
+     * comment line above it) at the top.
+     *
+     * @return array{top: string, bottom: string}
+     */
+    public static function phpHandlerBlocks(string $htaccess): array
+    {
+        $htaccess = str_replace("\r\n", "\n", $htaccess);
+
+        preg_match_all('/^# php -- BEGIN cPanel-generated handler.*?^# php -- END cPanel-generated handler[^\n]*\n?/ms', $htaccess, $cpanel);
+        $rest = str_replace($cpanel[0], '', $htaccess);
+
+        preg_match_all(
+            '/(?:^#[^\n]*\n)?<IfModule mime_module>(?:(?!<\/IfModule>).)*?AddHandler(?:(?!<\/IfModule>).)*<\/IfModule>\s*/ms',
+            $rest,
+            $other,
+        );
+
+        $top = implode('', $other[0]);
+        $bottom = implode('', $cpanel[0]);
+
+        return [
+            'top' => $top === '' ? '' : rtrim($top)."\n\n",
+            'bottom' => $bottom === '' ? '' : rtrim($bottom)."\n",
+        ];
+    }
+
+    private function isHtaccess(string $file): bool
+    {
+        return $file === '.htaccess' || str_ends_with($file, '/.htaccess');
     }
 
     private function composerInstall(): string
