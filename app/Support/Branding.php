@@ -6,8 +6,8 @@ use App\Models\Setting;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * The admin panel's brand name and light/dark logos, set under
- * Admin -> Settings. Logos are served by the `branding.logo` route
+ * The admin panel's brand name, light/dark logos and favicon, set under
+ * Admin -> Settings. Files are served by the `branding.logo` route
  * straight from storage, so no public/storage symlink is needed.
  */
 class Branding
@@ -17,6 +17,11 @@ class Branding
     public const LOGO = 'brand_logo';
 
     public const LOGO_DARK = 'brand_logo_dark';
+
+    public const FAVICON = 'brand_favicon';
+
+    /** Setting key for each variant the `branding.logo` route serves. */
+    public const VARIANTS = ['light' => self::LOGO, 'dark' => self::LOGO_DARK, 'favicon' => self::FAVICON];
 
     public const DIRECTORY = 'branding';
 
@@ -30,7 +35,7 @@ class Branding
      */
     public static function logoUrl(): ?string
     {
-        return static::path(self::LOGO) !== null ? static::url('light') : null;
+        return static::url('light');
     }
 
     /**
@@ -38,11 +43,19 @@ class Branding
      */
     public static function darkLogoUrl(): ?string
     {
-        return static::path(self::LOGO_DARK) !== null ? static::url('dark') : static::logoUrl();
+        return static::url('dark') ?? static::logoUrl();
     }
 
     /**
-     * The stored file for a variant ("light" or "dark"), if one exists.
+     * The uploaded favicon, or null for the browser/Filament default.
+     */
+    public static function faviconUrl(): ?string
+    {
+        return static::url('favicon');
+    }
+
+    /**
+     * The stored file for a setting key, if one exists.
      */
     public static function path(string $key): ?string
     {
@@ -51,11 +64,24 @@ class Branding
         return is_string($path) && Storage::disk('public')->exists($path) ? $path : null;
     }
 
-    private static function url(string $variant): string
+    /**
+     * Whether a path is one of the uploaded branding files — the only
+     * files the `branding.file` preview route may serve.
+     */
+    public static function isBrandingFile(string $path): bool
     {
-        // The file's own name busts browser caches when a logo is replaced.
-        $path = static::path($variant === 'dark' ? self::LOGO_DARK : self::LOGO);
+        return str_starts_with($path, self::DIRECTORY.'/')
+            && ! str_contains($path, '..')
+            && Storage::disk('public')->exists($path);
+    }
 
-        return route('branding.logo', ['variant' => $variant, 'v' => basename((string) $path)]);
+    private static function url(string $variant): ?string
+    {
+        $path = static::path(self::VARIANTS[$variant]);
+
+        // The file's own name busts browser caches when it's replaced.
+        return $path !== null
+            ? route('branding.logo', ['variant' => $variant, 'v' => basename($path)])
+            : null;
     }
 }

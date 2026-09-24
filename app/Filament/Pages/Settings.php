@@ -6,6 +6,7 @@ use App\Models\Setting;
 use App\Support\Branding;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Forms\Components\BaseFileUpload;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
@@ -19,8 +20,8 @@ use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Branding for this admin panel: its name, and a logo for light and for
- * dark mode (the dark one falls back to the light one).
+ * Branding for this admin panel: its name, a logo for light and for dark
+ * mode (the dark one falls back to the light one), and the favicon.
  */
 class Settings extends Page
 {
@@ -41,7 +42,29 @@ class Settings extends Page
             Branding::NAME => Setting::get(Branding::NAME),
             Branding::LOGO => Setting::get(Branding::LOGO),
             Branding::LOGO_DARK => Setting::get(Branding::LOGO_DARK),
+            Branding::FAVICON => Setting::get(Branding::FAVICON),
         ]);
+    }
+
+    /**
+     * A branding image upload: previews through the `branding.file` route
+     * (Filament's default preview URL is /storage/…, which needs a
+     * public/storage symlink this server may not have — the field then
+     * kept loading), with the image editor for cropping.
+     */
+    private static function brandingUpload(string $key): FileUpload
+    {
+        return FileUpload::make($key)
+            ->image()
+            ->imageEditor()
+            ->disk('public')
+            ->directory(Branding::DIRECTORY)
+            ->maxSize(2048)
+            ->getUploadedFileUsing(function (BaseFileUpload $component, string $file, string|array|null $storedFileNames): ?array {
+                $uploaded = $component->getUploadedFile($file, $storedFileNames);
+
+                return $uploaded === null ? null : [...$uploaded, 'url' => route('branding.file', ['path' => $file])];
+            });
     }
 
     public function form(Schema $schema): Schema
@@ -59,19 +82,19 @@ class Settings extends Page
                             ->helperText('Shown when no logo is set, and in the browser tab. Leave empty to use the app name.')
                             ->maxLength(100)
                             ->columnSpanFull(),
-                        FileUpload::make(Branding::LOGO)
+                        static::brandingUpload(Branding::LOGO)
                             ->label('Logo (light mode)')
-                            ->image()
-                            ->disk('public')
-                            ->directory(Branding::DIRECTORY)
-                            ->maxSize(2048),
-                        FileUpload::make(Branding::LOGO_DARK)
+                            ->imageEditorAspectRatios([null, '4:1', '3:1', '2:1', '1:1']),
+                        static::brandingUpload(Branding::LOGO_DARK)
                             ->label('Logo (dark mode)')
                             ->helperText('Optional — the light logo is used when empty.')
-                            ->image()
-                            ->disk('public')
-                            ->directory(Branding::DIRECTORY)
-                            ->maxSize(2048),
+                            ->imageEditorAspectRatios([null, '4:1', '3:1', '2:1', '1:1']),
+                        static::brandingUpload(Branding::FAVICON)
+                            ->label('Favicon')
+                            ->helperText('The browser tab icon. A square image, e.g. 64×64 PNG.')
+                            ->acceptedFileTypes(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml'])
+                            ->imageEditorAspectRatios(['1:1'])
+                            ->maxSize(512),
                     ]),
             ]);
     }
@@ -97,7 +120,7 @@ class Settings extends Page
     {
         $state = $this->form->getState();
 
-        foreach ([Branding::NAME, Branding::LOGO, Branding::LOGO_DARK] as $key) {
+        foreach ([Branding::NAME, Branding::LOGO, Branding::LOGO_DARK, Branding::FAVICON] as $key) {
             $new = filled($state[$key] ?? null) ? (string) $state[$key] : null;
             $old = Setting::get($key);
 

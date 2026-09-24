@@ -7,6 +7,7 @@ use App\Models\Setting;
 use App\Models\User;
 use App\Support\Branding;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\FileUpload;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -33,6 +34,7 @@ class BrandingSettingsTest extends TestCase
                 Branding::NAME => 'JPA License Server',
                 Branding::LOGO => UploadedFile::fake()->image('light.png', 200, 60),
                 Branding::LOGO_DARK => UploadedFile::fake()->image('dark.png', 200, 60),
+                Branding::FAVICON => UploadedFile::fake()->image('favicon.png', 64, 64),
             ])
             ->call('save')
             ->assertHasNoFormErrors();
@@ -42,11 +44,43 @@ class BrandingSettingsTest extends TestCase
         $this->assertSame('JPA License Server', $panel->getBrandName());
         $this->assertStringContainsString('/branding/light', (string) $panel->getBrandLogo());
         $this->assertStringContainsString('/branding/dark', (string) $panel->getDarkModeBrandLogo());
+        $this->assertStringContainsString('/branding/favicon', (string) $panel->getFavicon());
 
         // Served without a public/storage symlink, to guests too (sign-in page).
         auth()->logout();
         $this->get(route('branding.logo', ['variant' => 'light']))->assertOk();
         $this->get(route('branding.logo', ['variant' => 'dark']))->assertOk();
+        $this->get(route('branding.logo', ['variant' => 'favicon']))->assertOk();
+    }
+
+    /**
+     * What made the field keep loading: Filament previewed the saved logo
+     * from /storage/…, which needs a symlink this server may not have.
+     */
+    public function test_the_upload_fields_preview_saved_files_without_the_storage_symlink(): void
+    {
+        Storage::disk('public')->put('branding/logo.png', 'png');
+        Setting::set(Branding::LOGO, 'branding/logo.png');
+
+        $field = collect(Livewire::test(Settings::class)->instance()->form->getFlatComponents())
+            ->first(fn ($component): bool => $component instanceof FileUpload && $component->getName() === Branding::LOGO);
+        $preview = collect($field->getUploadedFiles())->first();
+
+        $this->assertSame(route('branding.file', ['path' => 'branding/logo.png']), $preview['url']);
+        $this->get($preview['url'])->assertOk();
+    }
+
+    public function test_the_preview_route_serves_only_branding_files_to_signed_in_users(): void
+    {
+        Storage::disk('public')->put('branding/logo.png', 'png');
+        Storage::disk('public')->put('private.txt', 'secret');
+
+        $this->get(route('branding.file', ['path' => 'private.txt']))->assertNotFound();
+        $this->get('/branding/file/branding/../private.txt')->assertNotFound();
+
+        auth()->logout();
+        $this->get(route('branding.file', ['path' => 'branding/logo.png']))
+            ->assertRedirect(route('filament.admin.auth.login'));
     }
 
     public function test_without_settings_the_app_name_and_no_logo_are_used(): void

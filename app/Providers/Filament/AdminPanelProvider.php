@@ -34,6 +34,7 @@ class AdminPanelProvider extends PanelProvider
             ->brandLogo(fn (): ?string => Branding::logoUrl())
             ->darkModeBrandLogo(fn (): ?string => Branding::darkLogoUrl())
             ->brandLogoHeight('2.5rem')
+            ->favicon(fn (): ?string => Branding::faviconUrl())
             ->colors([
                 'primary' => Color::Amber,
             ])

@@ -15,12 +15,21 @@ Route::get('/admin/system-update/live-output', fn () => response()->json([
     'output' => app(SelfUpdater::class)->liveOutput(),
 ]))->middleware('auth')->name('self-update.live-output');
 
-// The admin panel's logos (Admin -> Settings), served straight from storage
-// so no public/storage symlink is needed. Public: the sign-in page shows it.
+// The Settings page's upload previews: any stored branding file by path.
+// Signed-in only, and never anything outside the branding folder.
+Route::get('/branding/file/{path}', function (string $path) {
+    abort_unless(Branding::isBrandingFile($path), 404);
+
+    return Storage::disk('public')->response($path);
+})->where('path', '.*')->middleware('auth')->name('branding.file');
+
+// The admin panel's logos and favicon (Admin -> Settings), served straight
+// from storage so no public/storage symlink is needed. Public: the sign-in
+// page shows them.
 Route::get('/branding/{variant}', function (string $variant) {
-    $path = Branding::path($variant === 'dark' ? Branding::LOGO_DARK : Branding::LOGO);
+    $path = Branding::path(Branding::VARIANTS[$variant]);
 
     abort_if($path === null, 404);
 
     return Storage::disk('public')->response($path, headers: ['Cache-Control' => 'public, max-age=86400']);
-})->whereIn('variant', ['light', 'dark'])->name('branding.logo');
+})->whereIn('variant', array_keys(Branding::VARIANTS))->name('branding.logo');
