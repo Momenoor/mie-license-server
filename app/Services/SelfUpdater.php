@@ -369,19 +369,67 @@ class SelfUpdater
      */
     private function composer(): array
     {
-        if (is_file(base_path('composer.phar'))) {
-            return [...$this->php(), base_path('composer.phar')];
+        foreach ([base_path('composer.phar'), $this->downloadedComposerPath()] as $phar) {
+            if (is_file($phar)) {
+                return [...$this->php(), $phar];
+            }
         }
 
-        $composer = (new ExecutableFinder)->find('composer');
+        // The web server's PATH is often shorter than a login shell's, so
+        // also look where cPanel and common setups install Composer.
+        $home = getenv('HOME') ?: (function_exists('posix_getpwuid') ? (posix_getpwuid(posix_geteuid())['dir'] ?? '') : '');
+        $composer = (new ExecutableFinder)->find('composer', null, array_filter([
+            '/opt/cpanel/composer/bin',
+            '/usr/local/bin',
+            '/usr/bin',
+            $home !== '' ? $home.'/bin' : null,
+            $home !== '' ? $home.'/.composer/vendor/bin' : null,
+        ]));
 
         if ($composer === null) {
-            throw new RuntimeException('Composer was not found on this server.');
+            return [...$this->php(), $this->downloadComposer()];
         }
 
         return preg_match('/\.(bat|cmd|exe)$/i', $composer) === 1
             ? [$composer]
             : [...$this->php(), $composer];
+    }
+
+    /**
+     * No Composer anywhere: fetch composer.phar the official way — the
+     * installer, checked against the signature getcomposer.org publishes
+     * — into storage (kept across updates, never committed).
+     */
+    private function downloadComposer(): string
+    {
+        $target = $this->downloadedComposerPath();
+        $installer = $this->directory().'/composer-setup.php';
+
+        $signature = trim((string) $this->request()->get('https://composer.github.io/installer.sig')->body());
+        $script = $this->request()->get('https://getcomposer.org/installer')->body();
+
+        if ($signature === '' || $script === '' || ! hash_equals($signature, hash('sha384', $script))) {
+            throw new RuntimeException('Composer was not found on this server, and downloading it failed (installer missing or its signature did not match). Upload composer.phar to the license server\'s folder, next to artisan, and retry.');
+        }
+
+        file_put_contents($installer, $script);
+
+        try {
+            $result = $this->process([...$this->php(), $installer, '--quiet', '--install-dir='.dirname($target), '--filename='.basename($target)]);
+        } finally {
+            @unlink($installer);
+        }
+
+        if (! $result['ok'] || ! is_file($target)) {
+            throw new RuntimeException($result['output']."\nComposer was not found on this server, and installing it failed.");
+        }
+
+        return $target;
+    }
+
+    private function downloadedComposerPath(): string
+    {
+        return $this->directory().'/composer.phar';
     }
 
     /**
