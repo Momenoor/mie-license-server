@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Support\Branding;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -28,6 +29,11 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
+            // Set under Admin -> Settings (see App\Support\Branding).
+            ->brandName(fn (): string => Branding::name())
+            ->brandLogo(fn (): ?string => Branding::logoUrl())
+            ->darkModeBrandLogo(fn (): ?string => Branding::darkLogoUrl())
+            ->brandLogoHeight('2.5rem')
             ->colors([
                 'primary' => Color::Amber,
             ])
