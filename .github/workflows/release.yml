@@ -1,0 +1,45 @@
+# On every vX.Y.Z tag: build release notes from the commits since the
+# previous tag and publish them as a GitHub Release. The license server's
+# own System Update page (Admin -> System Update) shows them and updates to
+# the tag.
+#
+# GitHub doesn't run workflows for pushes of more than three tags at once —
+# push release tags one at a time (git push origin vX.Y.Z).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build release notes from commits
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          range="${previous:+$previous..}${GITHUB_REF_NAME}"
+          git log "$range" --no-merges --pretty='- %s' > notes.md
+          [ -s notes.md ] || echo '- Maintenance release' > notes.md
+          echo "Notes for ${GITHUB_REF_NAME} (since ${previous:-the first commit}):"
+          cat notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+          fi
