@@ -94,8 +94,21 @@
                 },
             }"
             x-init="
-                // Handle failed requests here, not with Livewire's error pop-up.
-                ['runNextStep', 'refreshState'].forEach((method) => $wire.$intercept(method, ({ onError }) => onError(({ preventDefault }) => preventDefault())));
+                // Handle this page's failed requests here, not with Livewire's
+                // error pop-up. A global request interceptor filtered by this
+                // component's id: $wire.$intercept() never matches the request
+                // in this Livewire version, so the pop-up still showed. Once
+                // per component — x-init runs again when the page redraws.
+                const id = $wire.$id;
+                window.__noErrorPopup ??= new Set();
+                if (! window.__noErrorPopup.has(id)) {
+                    window.__noErrorPopup.add(id);
+                    Livewire.interceptRequest(({ request, onError }) => {
+                        if (Array.from(request.messages).some((message) => message.component.id === id)) {
+                            onError(({ preventDefault }) => preventDefault());
+                        }
+                    });
+                }
                 start();
             "
             style="display: flex; flex-direction: column; gap: 1.5rem;"
