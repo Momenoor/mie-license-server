@@ -107,34 +107,34 @@
                     }
                     setTimeout(() => $wire.refreshState().then(() => this.tick(), () => this.retryLater()), 3000);
                 },
-            }"
-            x-on:updater-request-error.window="lastError = $event.detail"
-            x-init="
                 // Handle this page's failed requests here, not with Livewire's
                 // error pop-up. A global request interceptor filtered by this
                 // component's id: $wire.$intercept() never matches the request
-                // in this Livewire version, so the pop-up still showed. Once
-                // per component — x-init runs again when the page redraws.
-                const id = $wire.$id;
-                window.__noErrorPopup ??= new Set();
-                if (! window.__noErrorPopup.has(id)) {
+                // in this Livewire version. Once per component — this runs
+                // again when the page redraws. (A method, not x-init code: a
+                // comment-first x-init isn't recognised as statements by
+                // Alpine, fails to parse, and the update loop never started.)
+                handleErrorsHere() {
+                    const id = $wire.$id;
+                    window.__noErrorPopup ??= new Set();
+                    if (window.__noErrorPopup.has(id)) return;
                     window.__noErrorPopup.add(id);
                     Livewire.interceptRequest(({ request, onError }) => {
-                        if (Array.from(request.messages).some((message) => message.component.id === id)) {
-                            onError(({ preventDefault, response, body }) => {
-                                preventDefault();
-                                // Kept for the page to show if failures persist.
-                                const text = new DOMParser().parseFromString(body || '', 'text/html').body.textContent || '';
-                                window.dispatchEvent(new CustomEvent('updater-request-error', { detail: {
-                                    status: response?.status,
-                                    text: text.replace(/\s+/g, ' ').trim().slice(0, 300),
-                                } }));
-                            });
-                        }
+                        if (! Array.from(request.messages).some((message) => message.component.id === id)) return;
+                        onError(({ preventDefault, response, body }) => {
+                            preventDefault();
+                            // Kept for the page to show if failures persist.
+                            const text = new DOMParser().parseFromString(body || '', 'text/html').body.textContent || '';
+                            window.dispatchEvent(new CustomEvent('updater-request-error', { detail: {
+                                status: response?.status,
+                                text: text.replace(/\s+/g, ' ').trim().slice(0, 300),
+                            } }));
+                        });
                     });
-                }
-                start();
-            "
+                },
+            }"
+            x-on:updater-request-error.window="lastError = $event.detail"
+            x-init="handleErrorsHere(); start()"
             style="display: flex; flex-direction: column; gap: 1.5rem;"
         >
             <div x-show="waiting && ! gaveUp" x-cloak>
