@@ -28,6 +28,15 @@ use Throwable;
  */
 class SelfUpdater
 {
+    private const LOCK = 'self-update:step';
+
+    /**
+     * Seconds without any output after which a running step counts as dead
+     * (see runNextStepIfIdle()). Composer prints steadily; git's network
+     * calls abort after 60 silent seconds (see gitCommand()).
+     */
+    public const STALE_AFTER = 600;
+
     /**
      * @return array<string, string> step key => label, in run order
      */
@@ -103,10 +112,21 @@ class SelfUpdater
     public function runNextStepIfIdle(): string
     {
         try {
-            $lock = Cache::lock('self-update:step', 1800);
+            $lock = Cache::lock(self::LOCK, 1800);
 
             if (! $lock->get()) {
-                return 'busy';
+                // A step that has gone silent is dead: the web server killed
+                // its request, so it never released the lock. Take over
+                // rather than answering 'busy' until the lock expires.
+                if (($this->secondsSinceOutput() ?? 0) < self::STALE_AFTER) {
+                    return 'busy';
+                }
+
+                Cache::lock(self::LOCK)->forceRelease();
+
+                if (! $lock->get()) {
+                    return 'busy';
+                }
             }
         } catch (Throwable) {
             $lock = null; // Cache store without locks.
@@ -388,8 +408,15 @@ class SelfUpdater
             throw new RuntimeException('git was not found on this server.');
         }
 
-        // Trust this one repository only, if the web user doesn't own it.
-        return [$git, '-c', 'safe.directory='.str_replace('\\', '/', base_path())];
+        // Trust this one repository only, if the web user doesn't own it. A
+        // network transfer that stalls for 60 seconds aborts instead of
+        // hanging the step (and its request) indefinitely.
+        return [
+            $git,
+            '-c', 'safe.directory='.str_replace('\\', '/', base_path()),
+            '-c', 'http.lowSpeedLimit=1000',
+            '-c', 'http.lowSpeedTime=60',
+        ];
     }
 
     /**
@@ -500,13 +527,16 @@ class SelfUpdater
      */
     private function process(array $command, int $timeout = 300): array
     {
-        $env = [];
+        // Nothing may wait for a prompt no one will ever answer: git asking
+        // for credentials would otherwise hang the step until the web server
+        // killed its request.
+        $env = ['GIT_TERMINAL_PROMPT' => '0', 'GCM_INTERACTIVE' => 'never', 'COMPOSER_NO_INTERACTION' => '1'];
 
         // Web requests often run without HOME, which git and Composer need.
         if (getenv('HOME') === false || getenv('HOME') === '') {
             $home = storage_path('app/self-update/home');
             @mkdir($home, 0755, true);
-            $env = ['HOME' => $home, 'COMPOSER_HOME' => $home.'/.composer'];
+            $env += ['HOME' => $home, 'COMPOSER_HOME' => $home.'/.composer'];
         }
 
         $process = new Process($command, base_path(), $env, null, $timeout);
@@ -555,6 +585,18 @@ class SelfUpdater
     private function statePath(): string
     {
         return $this->directory().'/state.json';
+    }
+
+    /**
+     * How long since the running step last produced output (or started),
+     * or null when no step has run.
+     */
+    public function secondsSinceOutput(): ?int
+    {
+        clearstatcache(true, $this->liveLogPath());
+        $modified = @filemtime($this->liveLogPath());
+
+        return $modified === false ? null : max(0, time() - $modified);
     }
 
     private function liveLogPath(): string

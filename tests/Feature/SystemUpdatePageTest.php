@@ -76,6 +76,45 @@ class SystemUpdatePageTest extends TestCase
         $running->release();
     }
 
+    /**
+     * The loop the live server hit: a request killed mid-step never
+     * released the lock, so every later call answered 'busy'. A step that
+     * has been silent past STALE_AFTER is treated as dead and taken over.
+     */
+    public function test_a_step_silent_for_too_long_is_taken_over(): void
+    {
+        // A failed state: once the lock is taken over, runNextStep() returns
+        // straight away — no git or network, and 'stopped' rather than 'busy'
+        // proves the takeover.
+        $updater = app(SelfUpdater::class);
+        $updater->start('1.0.10');
+        $state = $updater->state();
+        $state['failed'] = true;
+        File::put(storage_path('app/self-update/state.json'), json_encode($state));
+
+        $this->assertTrue(Cache::lock('self-update:step', 1800)->get()); // never released
+
+        File::ensureDirectoryExists(storage_path('app/self-update'));
+        File::put(storage_path('app/self-update/live.log'), "== Check the server can update ==\n");
+        touch(storage_path('app/self-update/live.log'), time() - SelfUpdater::STALE_AFTER - 5);
+
+        $this->assertSame('busy', $this->withRecentOutput(fn () => $updater->runNextStepIfIdle()));
+        $this->assertSame('stopped', $updater->runNextStepIfIdle());
+    }
+
+    private function withRecentOutput(callable $callback): mixed
+    {
+        $path = storage_path('app/self-update/live.log');
+        $stale = filemtime($path);
+        touch($path);
+
+        try {
+            return $callback();
+        } finally {
+            touch($path, $stale);
+        }
+    }
+
     public function test_the_live_output_route_needs_a_signed_in_user(): void
     {
         File::ensureDirectoryExists(storage_path('app/self-update'));

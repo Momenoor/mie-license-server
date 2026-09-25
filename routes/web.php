@@ -13,6 +13,7 @@ Route::get('/', function () {
 // page. A plain route: a Livewire call would queue behind the step itself.
 Route::get('/admin/system-update/live-output', fn () => response()->json([
     'output' => app(SelfUpdater::class)->liveOutput(),
+    'silent_for' => app(SelfUpdater::class)->secondsSinceOutput(),
 ]))->middleware('auth')->name('self-update.live-output');
 
 // The Settings page's upload previews: any stored branding file by path.
