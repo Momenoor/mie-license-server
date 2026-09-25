@@ -106,6 +106,23 @@ class SelfUpdateGitTest extends TestCase
         $this->assertSame("RewriteEngine On\nRULES v2\n\n".self::CPANEL_HANDLER, $this->read('public/.htaccess'));
         $this->assertNotEmpty(File::glob($this->server.'/storage/app/self-update/public_.htaccess-*'));
         $this->assertSame('1.1.0', AppVersion::current());
+
+        // On the branch, not a detached HEAD — cPanel's Git Version Control
+        // refuses to manage a detached one — and still tracking GitHub's.
+        $this->assertSame('master', $this->gitOutput(['symbolic-ref', '--short', 'HEAD']));
+        $this->assertSame($this->gitOutput(['rev-parse', 'v1.1.0^{commit}']), $this->gitOutput(['rev-parse', 'HEAD']));
+        $this->assertSame('origin/master', $this->gitOutput(['rev-parse', '--abbrev-ref', 'master@{upstream}']));
+    }
+
+    /**
+     * @param  list<string>  $arguments
+     */
+    private function gitOutput(array $arguments): string
+    {
+        $process = new Process(['git', '-c', 'safe.directory=*', ...$arguments], $this->server);
+        $process->mustRun();
+
+        return trim($process->getOutput());
     }
 
     public function test_preflight_refuses_to_overwrite_other_local_changes(): void
