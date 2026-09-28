@@ -10,8 +10,9 @@ use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /**
- * New releases announced by the app repository — pushed by its GitHub
- * Action, or pulled with "Sync from GitHub" — always arrive unpublished.
+ * Releases announced by the app repository — pushed by its GitHub Action,
+ * or pulled with "Sync from GitHub". The newest one is published on
+ * arrival (see ReleasePublisherTest for the rest of that rule).
  */
 class ReleaseIntakeTest extends TestCase
 {
@@ -25,17 +26,17 @@ class ReleaseIntakeTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    public function test_a_pushed_tag_creates_an_unpublished_release_with_its_notes(): void
+    public function test_a_pushed_tag_creates_a_published_release_with_its_notes(): void
     {
         $this->withToken('secret-token')
             ->postJson('/api/v1/releases', ['version' => 'v1.2.0', 'notes' => "- Added dashboard filters\n- Fixed updater"])
             ->assertCreated()
-            ->assertJson(['version' => '1.2.0', 'is_published' => false, 'created' => true]);
+            ->assertJson(['version' => '1.2.0', 'is_published' => true, 'created' => true]);
 
         $release = Release::query()->sole();
         $this->assertSame('1.2.0', $release->version);
         $this->assertSame('mie', $release->product);
-        $this->assertFalse($release->is_published);
+        $this->assertTrue($release->is_published);
         $this->assertStringContainsString('Added dashboard filters', $release->notes);
     }
 
@@ -91,7 +92,7 @@ class ReleaseIntakeTest extends TestCase
 
         // A GitHub release: its notes and GitHub's publish date.
         $fromRelease = Release::query()->where('version', '1.0.13')->sole();
-        $this->assertFalse($fromRelease->is_published);
+        $this->assertTrue($fromRelease->is_published);
         $this->assertSame('- Keep PHP handler', $fromRelease->notes);
         $this->assertSame('2026-09-25 10:00:00', $fromRelease->released_at->utc()->toDateTimeString());
 
@@ -100,10 +101,12 @@ class ReleaseIntakeTest extends TestCase
         $this->assertSame('2026-09-24 08:30:00', $fromTag->released_at->utc()->toDateTimeString());
 
         // Already-recorded tags cost no extra request; drafts and
-        // non-version tags are skipped; existing releases stay published.
+        // non-version tags are skipped; 1.0.13 took over as the published
+        // release, and nobody runs 1.0.12 or 1.0.11.
         Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'commits/c12'));
         $this->assertSame(3, Release::query()->count());
-        $this->assertTrue(Release::query()->where('version', '1.0.12')->sole()->is_published);
+        $this->assertFalse(Release::query()->where('version', '1.0.12')->sole()->is_published);
+        $this->assertFalse($fromTag->is_published);
     }
 
     public function test_dates_are_stored_in_utc_and_shown_in_local_time(): void

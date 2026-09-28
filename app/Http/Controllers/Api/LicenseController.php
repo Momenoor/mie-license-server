@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\License;
+use App\Models\LicenseActivation;
 use App\Models\Release;
+use App\Services\ReleasePublisher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -48,7 +50,7 @@ class LicenseController extends Controller
             return $this->invalid('activation_limit_reached');
         }
 
-        $license->activations()->updateOrCreate(
+        $activation = $license->activations()->updateOrCreate(
             ['fingerprint' => $data['fingerprint']],
             [
                 'domain' => $data['domain'] ?? null,
@@ -58,6 +60,8 @@ class LicenseController extends Controller
                 'last_seen_at' => now(),
             ],
         );
+
+        $this->syncReleasesIfVersionChanged($activation, $license);
 
         return $this->valid($license);
     }
@@ -102,7 +106,20 @@ class LicenseController extends Controller
             'app_version' => $data['app_version'] ?? null,
         ]));
 
+        $this->syncReleasesIfVersionChanged($activation, $license);
+
         return $this->valid($license);
+    }
+
+    /**
+     * An installation moving to another version can leave an old release
+     * with nobody on it, which then gets unpublished.
+     */
+    private function syncReleasesIfVersionChanged(LicenseActivation $activation, License $license): void
+    {
+        if ($activation->wasRecentlyCreated || $activation->wasChanged('app_version')) {
+            app(ReleasePublisher::class)->sync($license->product);
+        }
     }
 
     private function findLicense(string $plaintextKey): ?License

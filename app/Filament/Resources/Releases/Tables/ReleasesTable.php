@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\Releases\Tables;
 
-use App\Models\LicenseActivation;
 use App\Models\Release;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
@@ -27,7 +26,7 @@ class ReleasesTable
                     ->boolean(),
                 TextColumn::make('installations')
                     ->label('Installations on it')
-                    ->state(fn (Release $record): int => LicenseActivation::query()->where('app_version', $record->version)->count()),
+                    ->state(fn (Release $record): int => $record->installationsCount()),
                 TextColumn::make('released_at')
                     ->dateTime()
                     ->sortable(),

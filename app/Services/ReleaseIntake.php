@@ -10,13 +10,15 @@ use RuntimeException;
 
 /**
  * Records releases announced by the app's repository — pushed by its
- * GitHub Action, or pulled from GitHub on demand. A new release is always
- * created unpublished; publishing stays a deliberate step in the admin
- * panel. An existing one only gets its notes filled in, never its
- * published state changed.
+ * GitHub Action, or pulled from GitHub on demand. Which releases are
+ * published is then settled by ReleasePublisher: the newest one goes out,
+ * older ones nobody runs are withdrawn. An existing release only gets its
+ * notes and date filled in here.
  */
 class ReleaseIntake
 {
+    public function __construct(private ReleasePublisher $publisher) {}
+
     /**
      * @return array{release: Release, created: bool}
      */
@@ -55,7 +57,9 @@ class ReleaseIntake
 
         $release->save();
 
-        return ['release' => $release, 'created' => $created];
+        $this->publisher->sync($release->product);
+
+        return ['release' => $release->refresh(), 'created' => $created];
     }
 
     /**

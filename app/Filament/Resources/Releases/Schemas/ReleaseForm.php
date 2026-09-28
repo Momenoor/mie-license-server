@@ -34,7 +34,7 @@ class ReleaseForm
                     ->columnSpanFull(),
                 Toggle::make('is_published')
                     ->label('Published')
-                    ->helperText('Installations are offered only published releases. Publish once the git tag is pushed.'),
+                    ->helperText('Installations are offered only published releases. Set automatically: the newest release is published, and older ones nobody runs are unpublished.'),
                 DateTimePicker::make('released_at')
                     ->default(now()),
             ]);

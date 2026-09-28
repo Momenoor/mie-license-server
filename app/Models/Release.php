@@ -31,6 +31,17 @@ class Release extends Model
     ];
 
     /**
+     * How many installations of this release's product report running it.
+     */
+    public function installationsCount(): int
+    {
+        return LicenseActivation::query()
+            ->where('app_version', $this->version)
+            ->whereHas('license', fn ($query) => $query->where('product', $this->product))
+            ->count();
+    }
+
+    /**
      * The highest published version for a product — by semantic version,
      * not by date or string order ("1.10.0" is newer than "1.9.0").
      */
