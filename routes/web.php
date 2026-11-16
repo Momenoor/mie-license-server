@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 
 Route::get('/', function () {
-    return view('welcome');
+    return redirect(route('filament.admin.pages.dashboard'));
 });
 
 // The running self-update step's output so far, polled by the System Update
